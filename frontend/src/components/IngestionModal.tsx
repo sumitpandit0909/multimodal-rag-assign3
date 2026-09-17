@@ -1,6 +1,30 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UploadCloud, CheckCircle2, AlertCircle, FileText, FileSpreadsheet, Loader2, X, RefreshCw, Layers } from 'lucide-react';
+import { 
+  UploadCloud, CheckCircle2, AlertCircle, FileText, FileSpreadsheet, 
+  Loader2, X, RefreshCw, Layers, ArrowRight, AlertTriangle, Sparkles 
+} from 'lucide-react';
 import type { DocumentItem } from '../types';
+
+interface IngestionStage {
+  id: string;
+  name: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  detail?: string;
+}
+
+interface IngestionJob {
+  job_id: string;
+  filename: string;
+  status: 'processing' | 'completed' | 'failed';
+  current_stage: string;
+  progress_percent: number;
+  stages: IngestionStage[];
+  chunks_indexed: number;
+  error?: string | null;
+  error_details?: string | null;
+  started_at: number;
+  completed_at?: number | null;
+}
 
 interface IngestionModalProps {
   isOpen: boolean;
@@ -18,13 +42,11 @@ export const IngestionModal: React.FC<IngestionModalProps> = ({
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
-  const [uploadStatus, setUploadStatus] = useState<{ type: 'idle' | 'success' | 'error'; message: string }>({
-    type: 'idle',
-    message: '',
-  });
+  const [activeJob, setActiveJob] = useState<IngestionJob | null>(null);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [isLoadingDocs, setIsLoadingDocs] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollIntervalRef = useRef<any>(null);
 
   // Esc key listener
   useEffect(() => {
@@ -34,6 +56,13 @@ export const IngestionModal: React.FC<IngestionModalProps> = ({
     if (isOpen) window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
+
+  // Clean up polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
 
   // Fetch ingested documents on open
   const fetchDocuments = async () => {
@@ -56,6 +85,32 @@ export const IngestionModal: React.FC<IngestionModalProps> = ({
       fetchDocuments();
     }
   }, [isOpen]);
+
+  // Poll active job status
+  const startPollingJob = (jobId: string) => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${apiBaseUrl}/jobs/${jobId}`);
+        if (!res.ok) return;
+        const jobData: IngestionJob = await res.json();
+        setActiveJob(jobData);
+
+        if (jobData.status === 'completed') {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+          fetchDocuments();
+          if (onIngestionSuccess) onIngestionSuccess();
+        } else if (jobData.status === 'failed') {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+      } catch (err) {
+        console.error('Job polling error:', err);
+      }
+    }, 800);
+  };
 
   if (!isOpen) return null;
 
@@ -88,7 +143,7 @@ export const IngestionModal: React.FC<IngestionModalProps> = ({
     if (!selectedFile) return;
 
     setIsUploading(true);
-    setUploadStatus({ type: 'idle', message: '' });
+    setActiveJob(null);
 
     const formData = new FormData();
     formData.append('file', selectedFile);
@@ -100,28 +155,38 @@ export const IngestionModal: React.FC<IngestionModalProps> = ({
       });
 
       if (!response.ok) {
-        throw new Error(`Upload failed with HTTP ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`Upload failed (${response.status}): ${errorText}`);
       }
 
       const result = await response.json();
-      setUploadStatus({
-        type: 'success',
-        message: result.message || `File ${selectedFile.name} successfully submitted to the ingestion pipeline!`,
-      });
+      if (result.job_id) {
+        startPollingJob(result.job_id);
+      }
       setSelectedFile(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
-
-      // Trigger callback and re-fetch documents after a short delay
-      if (onIngestionSuccess) onIngestionSuccess();
-      setTimeout(fetchDocuments, 3000);
     } catch (err: any) {
-      setUploadStatus({
-        type: 'error',
-        message: `Ingestion error: ${err.message}`,
+      setActiveJob({
+        job_id: 'err-' + Date.now(),
+        filename: selectedFile.name,
+        status: 'failed',
+        current_stage: 'Upload Request',
+        progress_percent: 0,
+        stages: [
+          { id: 'upload', name: 'File Upload & Validation', status: 'failed', detail: err.message }
+        ],
+        chunks_indexed: 0,
+        error: err.message,
+        started_at: Date.now() / 1000
       });
     } finally {
       setIsUploading(false);
     }
+  };
+
+  const handleResetJob = () => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    setActiveJob(null);
   };
 
   return (
@@ -132,7 +197,7 @@ export const IngestionModal: React.FC<IngestionModalProps> = ({
           <div className="modal-doc-info">
             <Layers size={18} color="#818cf8" />
             <strong>Ingestion Pipeline & Knowledge Base</strong>
-            <span className="page-chip">Dual-Path: Visual & Excel</span>
+            <span className="page-chip">Gemma-3-27b-it Vision & LangSmith</span>
           </div>
           <div className="modal-toolbar">
             <button onClick={fetchDocuments} className="tool-btn" title="Refresh Documents">
@@ -146,77 +211,173 @@ export const IngestionModal: React.FC<IngestionModalProps> = ({
 
         {/* Modal Body */}
         <div className="ingestion-body">
-          {/* Upload Area */}
+          {/* Upload & Pipeline Progress Area */}
           <section className="upload-section">
-            <h3 className="section-heading">Ingest New File</h3>
+            <div className="section-title-row">
+              <h3 className="section-heading">Ingest New Document</h3>
+              <span className="pipeline-pill">
+                <Sparkles size={12} /> Powered by google/gemma-3-27b-it
+              </span>
+            </div>
             <p className="section-subtext">
-              Supports <strong>PDF, PPT, PPTX, DOCX</strong> (converted via headless LibreOffice & screenshot by PyMuPDF) and <strong>XLSX/XLS</strong> (parsed directly into tabular structured data).
+              <strong>Path A:</strong> PDF / PPT / DOCX &rarr; Headless LibreOffice &rarr; PyMuPDF 150 DPI &rarr; Gemma-3-27b-it Vision &rarr; LlamaParse &rarr; Atlas Vector Store<br />
+              <strong>Path B:</strong> Excel (XLSX/XLS) &rarr; Structured Rows &amp; Sheets &rarr; Atlas (strictly zero screenshots)
             </p>
 
-            <div
-              className={`dropzone ${dragActive ? 'dropzone-active' : ''} ${selectedFile ? 'dropzone-has-file' : ''}`}
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.ppt,.pptx,.docx,.doc,.xlsx,.xls"
-                onChange={handleFileChange}
-                style={{ display: 'none' }}
-              />
-
-              <div className="dropzone-content">
-                <UploadCloud size={32} className="dropzone-icon" />
-                {selectedFile ? (
-                  <div>
-                    <p className="file-name-preview">{selectedFile.name}</p>
-                    <span className="file-size-preview">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</span>
+            {/* If there is an active job, show the live stage tracker */}
+            {activeJob ? (
+              <div className={`live-pipeline-card status-${activeJob.status}`}>
+                <div className="pipeline-card-header">
+                  <div className="file-info-header">
+                    <span className="active-file-title">{activeJob.filename}</span>
+                    <span className={`status-pill pill-${activeJob.status}`}>
+                      {activeJob.status === 'processing' && <Loader2 size={12} className="animate-spin" />}
+                      {activeJob.status === 'completed' && <CheckCircle2 size={12} />}
+                      {activeJob.status === 'failed' && <AlertCircle size={12} />}
+                      {activeJob.status.toUpperCase()}
+                    </span>
                   </div>
-                ) : (
-                  <div>
-                    <p className="dropzone-prompt">Drag & drop your presentation, document, or spreadsheet here</p>
-                    <span className="dropzone-sub">or click to browse from your computer</span>
+                  <div className="header-actions">
+                    {(activeJob.status === 'completed' || activeJob.status === 'failed') && (
+                      <button onClick={handleResetJob} className="action-pill-btn">
+                        Upload Another Document
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                <div className="pipeline-progress-track">
+                  <div 
+                    className={`pipeline-progress-fill ${activeJob.status === 'failed' ? 'progress-fill-failed' : ''}`}
+                    style={{ width: `${activeJob.progress_percent}%` }}
+                  />
+                </div>
+                <div className="progress-label-row">
+                  <span className="current-stage-text">
+                    <strong>Stage:</strong> {activeJob.current_stage}
+                  </span>
+                  <span className="percent-text">{activeJob.progress_percent}%</span>
+                </div>
+
+                {/* Stages List */}
+                <div className="stages-stepper">
+                  {activeJob.stages.map((stage, idx) => {
+                    const isPending = stage.status === 'pending';
+                    const isInProgress = stage.status === 'in_progress';
+                    const isCompleted = stage.status === 'completed';
+                    const isFailed = stage.status === 'failed';
+
+                    return (
+                      <div key={idx} className={`stage-step-item step-${stage.status}`}>
+                        <div className="step-bullet">
+                          {isCompleted && <CheckCircle2 size={15} className="step-icon-success" />}
+                          {isInProgress && <Loader2 size={15} className="step-icon-active animate-spin" />}
+                          {isPending && <div className="step-icon-pending" />}
+                          {isFailed && <AlertCircle size={15} className="step-icon-failed" />}
+                        </div>
+                        <div className="step-content">
+                          <div className="step-name-row">
+                            <span className="step-name">{stage.name}</span>
+                            <span className={`step-badge badge-${stage.status}`}>{stage.status}</span>
+                          </div>
+                          {stage.detail && <p className="step-detail">{stage.detail}</p>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Completed Banner */}
+                {activeJob.status === 'completed' && (
+                  <div className="job-completion-alert">
+                    <CheckCircle2 size={18} color="#34d399" />
+                    <div>
+                      <strong>Ingestion Succeeded!</strong>
+                      <p>All {activeJob.chunks_indexed} document chunks were indexed into MongoDB Atlas and are immediately ready for queries.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Failure Error Alert */}
+                {activeJob.status === 'failed' && (
+                  <div className="job-failure-alert">
+                    <AlertTriangle size={20} color="#f87171" className="failure-icon" />
+                    <div className="failure-details">
+                      <strong>Ingestion Pipeline Failed</strong>
+                      <p className="failure-message">{activeJob.error || 'An unexpected error occurred during ingestion.'}</p>
+                      {activeJob.error_details && (
+                        <details className="failure-accordion">
+                          <summary>View Traceback Details</summary>
+                          <pre>{activeJob.error_details}</pre>
+                        </details>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
-            </div>
+            ) : (
+              /* Dropzone for new uploads */
+              <>
+                <div
+                  className={`dropzone ${dragActive ? 'dropzone-active' : ''} ${selectedFile ? 'dropzone-has-file' : ''}`}
+                  onDragEnter={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDragOver={handleDrag}
+                  onDrop={handleDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,.ppt,.pptx,.docx,.doc,.xlsx,.xls"
+                    onChange={handleFileChange}
+                    style={{ display: 'none' }}
+                  />
 
-            {/* Action Bar */}
-            <div className="upload-actions">
-              <button
-                onClick={handleUpload}
-                disabled={!selectedFile || isUploading}
-                className="ingest-btn"
-              >
-                {isUploading ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    <span>Processing Ingestion Pipeline...</span>
-                  </>
-                ) : (
-                  <>
-                    <UploadCloud size={16} />
-                    <span>Ingest File to MongoDB Atlas</span>
-                  </>
-                )}
-              </button>
-              {selectedFile && !isUploading && (
-                <button onClick={() => setSelectedFile(null)} className="clear-btn">
-                  Clear
-                </button>
-              )}
-            </div>
+                  <div className="dropzone-content">
+                    <UploadCloud size={32} className="dropzone-icon" />
+                    {selectedFile ? (
+                      <div>
+                        <p className="file-name-preview">{selectedFile.name}</p>
+                        <span className="file-size-preview">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</span>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="dropzone-prompt">Drag & drop your presentation, document, or spreadsheet here</p>
+                        <span className="dropzone-sub">or click to browse from your computer</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
 
-            {/* Ingestion Status Alert */}
-            {uploadStatus.message && (
-              <div className={`status-banner banner-${uploadStatus.type}`}>
-                {uploadStatus.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-                <span>{uploadStatus.message}</span>
-              </div>
+                {/* Action Bar */}
+                <div className="upload-actions">
+                  <button
+                    onClick={handleUpload}
+                    disabled={!selectedFile || isUploading}
+                    className="ingest-btn"
+                  >
+                    {isUploading ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>Submitting to Pipeline...</span>
+                      </>
+                    ) : (
+                      <>
+                        <UploadCloud size={16} />
+                        <span>Start Ingestion Pipeline</span>
+                        <ArrowRight size={14} />
+                      </>
+                    )}
+                  </button>
+                  {selectedFile && !isUploading && (
+                    <button onClick={() => setSelectedFile(null)} className="clear-btn">
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </>
             )}
           </section>
 
@@ -224,12 +385,12 @@ export const IngestionModal: React.FC<IngestionModalProps> = ({
           <section className="library-section">
             <div className="library-header">
               <h3 className="section-heading">Indexed Documents in Atlas ({documents.length})</h3>
-              <span className="live-indicator">● Synced with Vector Store</span>
+              <span className="live-indicator">● Live Vector Store</span>
             </div>
 
             {documents.length === 0 ? (
               <div className="empty-library">
-                No documents found in the database. Drop files above to populate the knowledge base.
+                No documents found in the database. Ingest documents above to populate the enterprise knowledge base.
               </div>
             ) : (
               <div className="documents-grid">

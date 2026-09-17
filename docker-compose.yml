@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   chat-service:
     build:
@@ -11,19 +9,29 @@ services:
       - MONGO_URI=${MONGO_URI}
       - MONGO_DB=multimodal_rag
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-    volumes:
-      - ./data_drop:/app/data_drop
-      - ./processed_output:/app/processed_output
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-true}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-enterprise-multimodal-rag}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
     restart: unless-stopped
 
   ingestion-service:
     build:
       context: ./ingestion-services
       dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
     environment:
       - MONGO_URI=${MONGO_URI}
       - MONGO_DB=multimodal_rag
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-true}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-enterprise-multimodal-rag}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
       - DATA_DIR=/app/data_drop
       - OUTPUT_DIR=/app/processed_output
     volumes:
@@ -39,4 +47,4 @@ services:
       - "5173:80"
     depends_on:
       - chat-service
-
+      - ingestion-service

@@ -7,7 +7,8 @@ import { IngestionModal } from './components/IngestionModal';
 import type { Message, SourceNode, ChatResponse } from './types';
 import './App.css';
 
-const API_BASE_URL = 'http://localhost:8000';
+const CHAT_API_URL = 'http://localhost:8000';
+const INGESTION_API_URL = 'http://localhost:8001';
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -35,7 +36,7 @@ export default function App() {
   // Check health endpoint
   const checkHealth = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/health`);
+      const res = await fetch(`${CHAT_API_URL}/health`);
       const data = await res.json();
       if (data.status === 'healthy') {
         setIsBackendHealthy(true);
@@ -84,7 +85,7 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/chat`, {
+      const response = await fetch(`${CHAT_API_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -114,7 +115,7 @@ export default function App() {
         {
           id: (Date.now() + 1).toString(),
           sender: 'assistant',
-          text: `⚠️ Could not reach chat service (${err.message}). Ensure backend is active on ${API_BASE_URL}.`,
+          text: `⚠️ Could not reach chat service (${err.message}). Ensure backend is active on ${CHAT_API_URL}.`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
@@ -257,7 +258,7 @@ export default function App() {
       <IngestionModal
         isOpen={isIngestionOpen}
         onClose={() => setIsIngestionOpen(false)}
-        apiBaseUrl={API_BASE_URL}
+        apiBaseUrl={INGESTION_API_URL}
         onIngestionSuccess={checkHealth}
       />
     </div>

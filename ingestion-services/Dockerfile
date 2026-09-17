@@ -7,10 +7,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Install LibreOffice headless, fonts, and required build utilities
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreoffice-core \
-    libreoffice-writer \
-    libreoffice-impress \
-    libreoffice-calc \
+    libreoffice-nogui \
+    default-jre-headless \
     fonts-liberation \
     fonts-dejavu-core \
     libgl1 \
@@ -25,4 +23,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 
-CMD ["python", "src/main.py"]
+EXPOSE 8001
+
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001"]

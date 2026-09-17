@@ -1,11 +1,21 @@
+import os
 from google import genai
 from google.genai import types
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import List, Dict
 import logging
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        def decorator(f):
+            return f
+        return decorator
+
 logger = logging.getLogger(__name__)
 
+@traceable(name="search_vector_store", run_type="retriever")
 async def search_vector_store(query: str, db: AsyncIOMotorDatabase, genai_client: genai.Client, top_k: int = 4) -> List[Dict]:
     try:
         # 1. Embed user query with gemini-embedding-001 and 768 dimensions
@@ -50,4 +60,3 @@ async def search_vector_store(query: str, db: AsyncIOMotorDatabase, genai_client
     except Exception as e:
         logger.warning(f"Vector search failed (index 'vector_index' may not yet be active in Atlas): {e}")
         return []
-

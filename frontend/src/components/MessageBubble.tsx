@@ -1,4 +1,5 @@
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
 import { Eye, Table as TableIcon } from 'lucide-react';
 import type { SourceNode } from '../types';
 
@@ -17,8 +18,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 }) => {
   const isUser = sender === 'user';
 
-  // Parse [1], [2] citation markers and inject clickable verification pills
-  const renderFormattedText = (content: string) => {
+  // Parse [1], [2] citation markers and inject clickable verification buttons
+  const renderCitationTokens = (content: string) => {
     const parts = content.split(/(\[\d+\])/g);
     return parts.map((part, idx) => {
       const match = part.match(/\[(\d+)\]/);
@@ -26,14 +27,19 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         const citationId = parseInt(match[1], 10);
         const source = sources.find(s => s.citation_id === citationId);
 
-        if (!source) return <span key={idx}>{part}</span>;
+        if (!source) return part;
 
         const isVisual = source.source_type === 'visual';
 
         return (
           <button
             key={idx}
-            onClick={() => onCitationClick(source)}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onCitationClick(source);
+            }}
             className={`citation-token ${isVisual ? 'token-visual' : 'token-tabular'}`}
             title={
               isVisual
@@ -46,7 +52,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           </button>
         );
       }
-      return <span key={idx}>{part}</span>;
+      return part;
+    });
+  };
+
+  const processChildren = (children: React.ReactNode): React.ReactNode => {
+    return React.Children.map(children, (child) => {
+      if (typeof child === 'string') {
+        return renderCitationTokens(child);
+      }
+      return child;
     });
   };
 
@@ -54,7 +69,41 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     <div className={`message-row ${isUser ? 'user-row' : 'bot-row'}`}>
       <div className={`message-bubble ${isUser ? 'user-bubble' : 'bot-bubble'}`}>
         <div className="markdown-body">
-          {isUser ? text : renderFormattedText(text)}
+          {isUser ? (
+            <div className="user-text-content">{text}</div>
+          ) : (
+            <ReactMarkdown
+              components={{
+                p: ({ children }) => <p>{processChildren(children)}</p>,
+                li: ({ children }) => <li>{processChildren(children)}</li>,
+                h1: ({ children }) => <h1 className="md-h1">{processChildren(children)}</h1>,
+                h2: ({ children }) => <h2 className="md-h2">{processChildren(children)}</h2>,
+                h3: ({ children }) => <h3 className="md-h3">{processChildren(children)}</h3>,
+                h4: ({ children }) => <h4 className="md-h4">{processChildren(children)}</h4>,
+                strong: ({ children }) => <strong>{processChildren(children)}</strong>,
+                em: ({ children }) => <em>{processChildren(children)}</em>,
+                blockquote: ({ children }) => <blockquote className="md-blockquote">{processChildren(children)}</blockquote>,
+                table: ({ children }) => (
+                  <div className="md-table-container">
+                    <table className="md-table">{children}</table>
+                  </div>
+                ),
+                code: ({ className, children, ...props }: any) => {
+                  const isBlock = String(children).includes('\n');
+                  if (!isBlock) {
+                    return <code className="md-inline-code" {...props}>{children}</code>;
+                  }
+                  return (
+                    <pre className="md-pre">
+                      <code className={className} {...props}>{children}</code>
+                    </pre>
+                  );
+                }
+              }}
+            >
+              {text}
+            </ReactMarkdown>
+          )}
         </div>
 
         {/* Sources tray at the bottom of the assistant message */}

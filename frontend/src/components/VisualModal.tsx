@@ -84,7 +84,7 @@ export const VisualModal: React.FC<VisualModalProps> = ({ isOpen, onClose, sourc
         >
           {source.screenshot_url ? (
             <img
-              src={source.screenshot_url.startsWith('http') ? source.screenshot_url : `http://localhost:8000${source.screenshot_url}`}
+              src={source.screenshot_url.startsWith('http') ? source.screenshot_url : `http://localhost:8001${source.screenshot_url}`}
               alt={`Page ${source.page_number} screenshot`}
               draggable={false}
               style={{

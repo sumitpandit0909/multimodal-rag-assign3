@@ -13,8 +13,7 @@ if str(SRC_DIR) not in sys.path:
 load_dotenv()
 load_dotenv(SRC_DIR.parent.parent / ".env")
 
-import shutil
-from fastapi import FastAPI, status, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -23,18 +22,6 @@ from google import genai
 from db.memory import MongoChatMemory
 from agent.tools import search_vector_store
 from agent.agent_graph import run_agentic_rag
-
-# Try importing ingestion worker logic for direct pipeline triggering
-INGESTION_SRC = SRC_DIR.parent.parent / "ingestion-services" / "src"
-if INGESTION_SRC.exists() and str(INGESTION_SRC) not in sys.path:
-    sys.path.insert(0, str(INGESTION_SRC))
-
-try:
-    from main import process_file
-except Exception:
-    process_file = None
-
-
 
 from fastapi.staticfiles import StaticFiles
 
@@ -125,28 +112,6 @@ async def chat_endpoint(request: ChatRequest):
         sources=rag_result["source_nodes"]
     )
 
-DATA_DIR = SRC_DIR.parent.parent / "data_drop"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-@app.post("/upload")
-async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    file_path = DATA_DIR / file.filename
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    if process_file:
-        background_tasks.add_task(process_file, file_path, genai_client)
-        return {
-            "status": "processing",
-            "message": f"'{file.filename}' uploaded. Ingestion pipeline is running.",
-            "file_name": file.filename
-        }
-    else:
-        return {
-            "status": "queued",
-            "message": f"'{file.filename}' saved to data_drop.",
-            "file_name": file.filename
-        }
 
 @app.get("/documents")
 async def get_documents():
