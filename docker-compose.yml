@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  chat-service:
+    build:
+      context: ./chat-service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGO_URI=${MONGO_URI}
+      - MONGO_DB=multimodal_rag
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - ./data_drop:/app/data_drop
+      - ./processed_output:/app/processed_output
+    restart: unless-stopped
+
+  ingestion-service:
+    build:
+      context: ./ingestion-services
+      dockerfile: Dockerfile
+    environment:
+      - MONGO_URI=${MONGO_URI}
+      - MONGO_DB=multimodal_rag
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DATA_DIR=/app/data_drop
+      - OUTPUT_DIR=/app/processed_output
+    volumes:
+      - ./data_drop:/app/data_drop
+      - ./processed_output:/app/processed_output
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - chat-service
+
