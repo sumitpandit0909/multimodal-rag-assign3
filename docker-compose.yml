@@ -14,6 +14,8 @@ services:
       - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
       - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-enterprise-multimodal-rag}
       - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
+    volumes:
+      - ./processed_output:/app/processed_output
     restart: unless-stopped
 
   ingestion-service:

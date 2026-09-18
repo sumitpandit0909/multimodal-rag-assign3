@@ -18,11 +18,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 }) => {
   const isUser = sender === 'user';
 
-  // Parse [1], [2] citation markers and inject clickable verification buttons
+  // Parse [1], [2], [Source 1] citation markers and inject clickable verification buttons
   const renderCitationTokens = (content: string) => {
-    const parts = content.split(/(\[\d+\])/g);
+    const parts = content.split(/(\[(?:Source\s*|Doc\s*)?\d+\])/gi);
     return parts.map((part, idx) => {
-      const match = part.match(/\[(\d+)\]/);
+      const match = part.match(/\[(?:Source\s*|Doc\s*)?(\d+)\]/i);
       if (match) {
         const citationId = parseInt(match[1], 10);
         const source = sources.find(s => s.citation_id === citationId);

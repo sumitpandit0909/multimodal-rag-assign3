@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from google import genai
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from langgraph.graph import StateGraph, START, END
@@ -19,11 +19,10 @@ logger = logging.getLogger(__name__)
 
 def build_agent_graph(db: AsyncIOMotorDatabase, client: genai.Client):
     """
-    Constructs and compiles the Self-Corrective Agentic RAG StateGraph:
+    Constructs and compiles the streamlined, low-latency Agentic RAG StateGraph:
       START -> retrieve -> grade_documents
-                 ├── (relevant) -> generate -> END
-                 ├── (irrelevant & rewrite_count < 1) -> rewrite_query -> retrieve
-                 └── (irrelevant & rewrite_count >= 1 & no sources) -> no_sources -> END
+                 ├── (relevant)   -> generate -> END
+                 └── (irrelevant) -> no_sources -> END
     """
     nodes = RAGNodes(db, client)
     workflow = StateGraph(AgentState)
@@ -31,7 +30,6 @@ def build_agent_graph(db: AsyncIOMotorDatabase, client: genai.Client):
     # 1. Register Graph Nodes
     workflow.add_node("retrieve", nodes.retrieve)
     workflow.add_node("grade_documents", nodes.grade_documents)
-    workflow.add_node("rewrite_query", nodes.rewrite_query)
     workflow.add_node("generate", nodes.generate)
     workflow.add_node("no_sources", nodes.no_sources)
 
@@ -44,12 +42,10 @@ def build_agent_graph(db: AsyncIOMotorDatabase, client: genai.Client):
         nodes.decide_after_grading,
         {
             "generate": "generate",
-            "rewrite": "rewrite_query",
             "no_sources": "no_sources"
         }
     )
 
-    workflow.add_edge("rewrite_query", "retrieve")
     workflow.add_edge("generate", END)
     workflow.add_edge("no_sources", END)
 
@@ -78,11 +74,9 @@ async def run_agentic_rag(
     graph = get_compiled_graph(db, client)
     initial_state: AgentState = {
         "query": query,
-        "original_query": query,
         "history": history,
         "retrieved_sources": [],
         "documents_relevant": False,
-        "rewrite_count": 0,
         "answer": "",
         "source_nodes": []
     }

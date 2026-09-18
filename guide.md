@@ -97,39 +97,31 @@ The `chat-service` orchestrates query answering using a compiled LangGraph `Stat
    [START]
       │
       ▼
- [retrieve] ◀────────────────────────────────┐
-      │                                      │
-      ▼                                      │ (If irrelevant & rewrite_count < 1)
-[grade_documents]                            │
-      │                                      │
-      ├── (is_relevant == True) ──▶ [generate] ──▶ [END]
-      │                                ▲
-      ├── (is_relevant == False) ──────┤ (If rewritten and some sources exist)
-      │        │                       │
-      │        ├── (rewrite_count < 1) ┴──▶ [rewrite_query]
-      │        │
-      │        └── (rewrite_count >= 1 & no sources) ──▶ [no_sources] ──▶ [END]
+ [retrieve]
+      │
+      ▼
+[grade_documents]
+      │
+      ├── (is_relevant == True)  ──▶ [generate]   ──▶ [END]
+      └── (is_relevant == False) ──▶ [no_sources] ──▶ [END]
 ```
 
 ### LangGraph State Schema (`AgentState`)
 ```python
 class AgentState(TypedDict):
-    query: str                  # Current search query (can be rewritten)
-    original_query: str         # Original user intent
+    query: str                  # User inquiry
     history: List[Dict]         # Multi-turn chat session history
     retrieved_sources: List[Dict]# Vector chunks from MongoDB Atlas
     documents_relevant: bool    # Grader output flag
-    rewrite_count: int          # Loop counter (bounded to 1 attempt)
     answer: str                 # Final synthesized answer
     source_nodes: List[Dict]    # Formatted source citations for frontend
 ```
 
 ### Node Descriptions
-1. **`retrieve`**: Calls `search_vector_store`, generating a 768d query embedding with `gemini-embedding-001` and running `$vectorSearch` on Atlas.
-2. **`grade_documents`**: Uses `google/gemma-3-27b-it` (OpenRouter) with temperature 0.0 to check if retrieved snippets contain relevant facts for the query (`YES`/`NO`).
-3. **`rewrite_query`**: If documents are graded irrelevant, reformulates and expands the search query with technical keywords and synonyms, then routes back to `retrieve`.
-4. **`generate`**: Synthesizes the final answer citing verified sources (`[1]`, `[2]`) using `google/gemma-3-27b-it` (fallback to `gemini-2.0-flash`).
-5. **`no_sources`**: If no relevant documents match after query rewriting, politely explains that no matching records were found and invites the user to drop files into the ingestion service.
+1. **`retrieve`**: Calls `search_vector_store` (cached 768d query embedding + MongoDB Atlas `$vectorSearch`).
+2. **`grade_documents`**: Strict semantic evaluation using `google/gemini-2.5-flash-lite` (~200ms) to ensure zero false-positive citations.
+3. **`generate`**: Synthesizes the final answer citing verified sources (`[1]`, `[2]`) using `google/gemma-3-27b-it` (fallback to `gemini-2.0-flash`). Only referenced citations are returned to the frontend.
+4. **`no_sources`**: Formulates a polite, factual response when no relevant documents exist. Returns `source_nodes: []` (0 images).
 
 ---
 
