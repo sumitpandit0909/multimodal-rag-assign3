@@ -1,71 +1,96 @@
 import os
 import logging
-from typing import Optional
-from openai import OpenAI
+from typing import Optional, List
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage
 from google import genai
 from google.genai import types
-
-try:
-    from langsmith.wrappers import wrap_openai
-    from langsmith import traceable
-except ImportError:
-    wrap_openai = lambda c: c
-    def traceable(*args, **kwargs):
-        def decorator(f):
-            return f
-        return decorator
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are an Enterprise Multimodal Knowledge Assistant.
 Answer the user's inquiry based strictly on the provided context retrieved from corporate files.
+Be concise, direct, and factual. Limit your response to 2-3 focused paragraphs.
 When you cite information, mark the source using inline brackets like [1], [2] matching the provided sources index.
-If you do not find the answer in the provided context, state that clearly without guessing.
+If you do not find the answer in the provided context, state that clearly without guessing and DO NOT cite any sources.
 """
 
-def get_openrouter_client() -> Optional[OpenAI]:
-    """Returns a LangSmith-wrapped OpenAI client configured for OpenRouter."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
+def get_openrouter_api_key() -> Optional[str]:
+    return os.getenv("OPENROUTER_API_KEY")
+
+def get_generator_llm() -> Optional[ChatOpenAI]:
+    """
+    Native LangChain ChatOpenAI configured for OpenRouter google/gemma-3-27b-it.
+    Configured with a 14-second fail-fast timeout and 500 max_tokens to eliminate latency spikes.
+    """
+    api_key = get_openrouter_api_key()
     if not api_key:
         return None
-    raw_client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
+    return ChatOpenAI(
+        model="google/gemini-2.5-flash-lite",
+        openai_api_base="https://openrouter.ai/api/v1",
+        openai_api_key=api_key,
+        temperature=0.2,
+        max_tokens=500,
+        request_timeout=14.0,
+        max_retries=1
     )
-    return wrap_openai(raw_client)
 
-@traceable(name="gemma_chat_completion", run_type="llm")
-def generate_with_gemma_openrouter(
-    client: OpenAI, 
-    prompt: str, 
-    system_prompt: str = SYSTEM_PROMPT,
-    temperature: float = 0.2,
-    max_tokens: int = 2048
-) -> str:
-    """Generates completion using google/gemma-3-27b-it via OpenRouter."""
-    response = client.chat.completions.create(
-        model="google/gemma-3-27b-it",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=temperature,
-        max_tokens=max_tokens
+def get_utility_llm() -> Optional[ChatOpenAI]:
+    """
+    Native LangChain ChatOpenAI configured for OpenRouter google/gemini-2.5-flash-lite.
+    Ultra-low latency for relevance grading and single-line query rewrites (<250ms).
+    """
+    api_key = get_openrouter_api_key()
+    if not api_key:
+        return None
+    return ChatOpenAI(
+        model="google/gemini-2.5-flash-lite",
+        openai_api_base="https://openrouter.ai/api/v1",
+        openai_api_key=api_key,
+        temperature=0.0,
+        max_tokens=35,
+        request_timeout=6.0,
+        max_retries=1
     )
-    return response.choices[0].message.content or ""
+
+async def ainvoke_generator(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
+    """Asynchronously calls the LangChain generator model with OpenRouter."""
+    llm = get_generator_llm()
+    if not llm:
+        return ""
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=prompt)
+    ]
+    resp = await llm.ainvoke(messages)
+    return str(resp.content or "")
+
+async def ainvoke_utility(prompt: str, system_prompt: str = "Output ONLY the requested string.") -> str:
+    """Asynchronously calls the LangChain fast utility model."""
+    llm = get_utility_llm()
+    if not llm:
+        return ""
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=prompt)
+    ]
+    resp = await llm.ainvoke(messages)
+    return str(resp.content or "")
 
 def generate_with_gemini_fallback(
     client: genai.Client, 
     contents, 
     config: Optional[types.GenerateContentConfig] = None
 ) -> str:
-    """Fallback generator trying Gemini models with exponential retry."""
+    """Direct Google GenAI SDK fallback with exponential retry if OpenRouter times out."""
     models_to_try = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
     last_err = None
     
     cfg = config or types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT,
-        temperature=0.2
+        temperature=0.2,
+        max_output_tokens=500
     )
 
     for model_name in models_to_try:
