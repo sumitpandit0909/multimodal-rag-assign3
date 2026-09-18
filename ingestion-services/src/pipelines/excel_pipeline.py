@@ -44,6 +44,9 @@ def parse_excel_file(file_path: Path) -> List[Dict]:
             continue
 
         total_rows = len(df)
+        total_cols = max(len(df.columns), 1)
+        # Limit cells per chunk to ~300 to guarantee embedding token limits are respected
+        chunk_row_size = max(5, min(20, 300 // total_cols))
         
         # Process in batches of rows to stay well within embedding token limits
         for i in range(0, total_rows, chunk_row_size):

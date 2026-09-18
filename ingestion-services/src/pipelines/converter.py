@@ -26,10 +26,14 @@ def convert_to_pdf(input_file_path: Path, output_dir: Path) -> Path:
     suffix = input_file_path.suffix.lower()
     specific_filter = "pdf:impress_pdf_Export" if suffix in [".ppt", ".pptx"] else "pdf:writer_pdf_Export"
 
+    # Create unique isolated profile directory to prevent concurrent lockups
+    profile_dir = tempfile.mkdtemp(prefix="lo_profile_")
+    profile_arg = f"-env:UserInstallation=file://{Path(profile_dir).as_posix()}"
+
     attempts = [
         # Attempt 1: Standard conversion
         [
-            "libreoffice", "--headless", "--invisible", "--nodefault", 
+            "libreoffice", profile_arg, "--headless", "--invisible", "--nodefault", 
             "--nofirststartwizard", "--nolockcheck", "--nologo", "--norestore",
             "--convert-to", "pdf",
             "--outdir", str(output_dir),
@@ -37,7 +41,7 @@ def convert_to_pdf(input_file_path: Path, output_dir: Path) -> Path:
         ],
         # Attempt 2: Explicit application export filter
         [
-            "libreoffice", "--headless", "--invisible", "--nodefault",
+            "libreoffice", profile_arg, "--headless", "--invisible", "--nodefault",
             "--nofirststartwizard", "--nolockcheck", "--nologo", "--norestore",
             "--convert-to", specific_filter,
             "--outdir", str(output_dir),
@@ -46,23 +50,26 @@ def convert_to_pdf(input_file_path: Path, output_dir: Path) -> Path:
     ]
 
     last_error = ""
-    for cmd in attempts:
-        logger.info(f"Running LibreOffice conversion command: {' '.join(cmd)}")
-        try:
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=120
-            )
-            if expected_pdf.exists() and expected_pdf.stat().st_size > 0:
-                logger.info(f"Successfully converted {input_file_path.name} to {expected_pdf.name}")
-                return expected_pdf
-            last_error = result.stderr or result.stdout
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"LibreOffice command attempt failed: {e}")
+    try:
+        for cmd in attempts:
+            logger.info(f"Running LibreOffice conversion command: {' '.join(cmd)}")
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=120
+                )
+                if expected_pdf.exists() and expected_pdf.stat().st_size > 0:
+                    logger.info(f"Successfully converted {input_file_path.name} to {expected_pdf.name}")
+                    return expected_pdf
+                last_error = result.stderr or result.stdout
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"LibreOffice command attempt failed: {e}")
+    finally:
+        shutil.rmtree(profile_dir, ignore_errors=True)
 
     # If expected_pdf still not found
     if not expected_pdf.exists() or expected_pdf.stat().st_size == 0:

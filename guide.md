@@ -135,14 +135,21 @@ class AgentState(TypedDict):
 
 ### Ingestion Service (`ingestion-services/`)
 * **`Dockerfile`**: Debian Python 3.11 container with `libreoffice-nogui`, `default-jre-headless`, and PyMuPDF dependencies.
-* **`requirements.txt`**: Core dependencies (`fastapi`, `pymongo`, `google-genai`, `openai`, `langsmith`, `llama-parse`, `pymupdf`, `pandas`, `openpyxl`, `python-pptx`).
-* **`src/main.py`**: Ingestion server API (`POST /upload`, `GET /jobs/{job_id}`, `GET /documents`, `GET /health`, background directory watcher).
-* **`src/pipelines/converter.py`**: Headless LibreOffice conversion + `python-pptx` presentation parser fallback.
+* **`requirements.txt`**: Core dependencies (`fastapi`, `pymongo`, `google-genai`, `openai`, `langsmith`, `llama-parse`, `pymupdf`, `pandas`, `openpyxl`, `python-pptx`, `boto3`).
+* **`src/main.py`**: Slim FastAPI application factory with lifespan (startup stale job sweep + background directory watcher) and router registration.
+* **`src/core/config.py`**: Centralized environment variable management, path definitions, and GenAI client.
+* **`src/models/schemas.py`**: Pydantic data schemas (`JobStage`, `JobStatus`, `UploadResponse`, `DocumentListResponse`, `HealthResponse`).
+* **`src/services/job_manager.py`**: Thread-safe job state tracker with live MongoDB Atlas synchronization and stale job sweeper.
+* **`src/services/pipeline_orchestrator.py`**: High-performance orchestrator running page vision classification, LlamaParse extraction, and R2 uploads in parallel (`ThreadPoolExecutor` 4 workers).
+* **`src/services/watcher.py`**: Background directory watcher for `data_drop/` with file write completion verification.
+* **`src/routes/ingestion_routes.py`**: Modular FastAPI `APIRouter` exposing `/upload`, `/jobs/{job_id}`, `/jobs`, `/documents`, and `/health`.
+* **`src/pipelines/converter.py`**: Headless LibreOffice conversion with unique profile isolation (`-env:UserInstallation`) + `python-pptx` presentation parser fallback.
 * **`src/pipelines/visual_pipeline.py`**: PyMuPDF 150 DPI PNG page screenshotting.
 * **`src/pipelines/vision_filter.py`**: Gemma-3-27b-it OpenRouter vision filter (`YES`/`NO`).
 * **`src/pipelines/llama_parser.py`**: Layout-aware markdown parsing with LlamaParse.
-* **`src/pipelines/excel_pipeline.py`**: 20-row batch chunking, markdown conversion, BSON sanitization (**no screenshots**).
-* **`src/storage/vector_store.py`**: 768d `gemini-embedding-001` generation and Atlas vector store insertion.
+* **`src/pipelines/excel_pipeline.py`**: Dynamic token-aware row chunking based on column width, markdown conversion, BSON sanitization (**no screenshots**).
+* **`src/storage/vector_store.py`**: Batch 768d embedding generation with automatic file de-duplication in MongoDB Atlas.
+* **`src/storage/r2_storage.py`**: Cloudflare R2 S3-compatible cloud object storage manager for page screenshots and converted PDFs with automatic fallback to local `/static` storage.
 
 ### Chat Service (`chat-service/`)
 * **`Dockerfile`**: Lightweight Python 3.11 container running Uvicorn on port 8000.
