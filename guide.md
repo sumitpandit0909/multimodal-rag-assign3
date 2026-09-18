@@ -118,9 +118,9 @@ class AgentState(TypedDict):
 ```
 
 ### Node Descriptions
-1. **`retrieve`**: Calls `search_vector_store` (cached 768d query embedding + MongoDB Atlas `$vectorSearch`).
-2. **`grade_documents`**: Strict semantic evaluation using `google/gemini-2.5-flash-lite` (~200ms) to ensure zero false-positive citations.
-3. **`generate`**: Synthesizes the final answer citing verified sources (`[1]`, `[2]`) using `google/gemma-3-27b-it` (fallback to `gemini-2.0-flash`). Only referenced citations are returned to the frontend.
+1. **`retrieve`**: Wide candidate retrieval (`top_k=8`, `numCandidates=100`) via `search_vector_store` (cached 768d query embedding + MongoDB Atlas `$vectorSearch`).
+2. **`grade_documents` (Semantic List-wise Re-ranker & Grader)**: Uses `google/gemini-2.5-flash-lite` (~200ms) to semantically evaluate all 8 candidates against the question, re-order them by true answer usefulness, select the top-3 best passages, and reject out-of-domain queries (`NONE`).
+3. **`generate`**: Synthesizes the final grounded answer citing the re-ranked top passages (`[1]`, `[2]`) using `google/gemma-3-27b-it` (fallback to `gemini-2.0-flash`). Only referenced citations are returned to the frontend.
 4. **`no_sources`**: Formulates a polite, factual response when no relevant documents exist. Returns `source_nodes: []` (0 images).
 
 ---

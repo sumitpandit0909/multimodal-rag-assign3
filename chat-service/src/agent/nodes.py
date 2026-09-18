@@ -26,58 +26,99 @@ class RAGNodes:
         self.client = client
 
     async def retrieve(self, state: AgentState) -> Dict[str, Any]:
-        """Node 1: Retrieve candidate vectors from MongoDB Atlas with embedding caching."""
+        """Node 1: Retrieve wide pool of candidate vectors (top_k=8) from MongoDB Atlas with embedding caching."""
         query = state.get("query", "")
-        sources = await search_vector_store(query, self.db, self.client, top_k=3)
+        sources = await search_vector_store(query, self.db, self.client, top_k=8)
         return {"retrieved_sources": sources}
 
     async def grade_documents(self, state: AgentState) -> Dict[str, Any]:
         """
-        Node 2: Strict semantic relevance grading with google/gemini-2.5-flash-lite (~200ms).
-        Rejects out-of-domain / irrelevant queries with zero hallucination.
+        Node 2: Semantic List-wise Re-ranker & Relevance Quality Gate.
+        Powered by google/gemini-2.5-flash-lite (~200ms).
+        Evaluates the semantic utility of all retrieved candidates, re-orders them by true answer relevance,
+        and eliminates irrelevant passages before synthesis.
         """
         sources = state.get("retrieved_sources", [])
         query = state.get("query", "")
 
         if not sources:
             logger.info(f"[Node:grade_documents] No sources returned for '{query}'. Relevant: False")
-            return {"documents_relevant": False}
+            return {"documents_relevant": False, "retrieved_sources": []}
 
-        # Build clean snippet preview
-        snippets = "\n".join([
-            f"[{i}] Document: {s.get('file_name', 'doc')}\n{s.get('text_content', '')[:300]}"
-            for i, s in enumerate(sources[:3], start=1)
-        ])
+        # Build clean candidate snippets preview (up to 8)
+        candidate_snippets = []
+        for i, s in enumerate(sources[:8], start=1):
+            src_info = f"Page {s.get('page_number')}" if s.get("page_number") else f"Sheet {s.get('sheet_name')}"
+            clean_text = s.get('text_content', '').strip().replace("\n", " ")[:280]
+            candidate_snippets.append(f"[{i}] {s.get('file_name', 'Doc')} ({src_info}): {clean_text}")
 
-        grader_prompt = (
+        snippets_str = "\n\n".join(candidate_snippets)
+
+        reranker_prompt = (
             f"User Question: {query}\n\n"
-            f"Retrieved Document Context:\n{snippets}\n\n"
-            f"Task: Does ANY snippet contain facts or information specifically relevant to answering the User Question?\n"
-            f"- If the question is asking about topic A and snippets are about topic B, answer NO.\n"
-            f"- Answer strictly with either 'YES' or 'NO'."
+            f"Candidate Passages:\n{snippets_str}\n\n"
+            f"Instructions:\n"
+            f"1. Semantically evaluate which passages contain facts, data, or direct answers to the User Question.\n"
+            f"2. Select the top 1 to 3 most relevant passage numbers and rank them in descending order of usefulness (e.g. [2, 1, 5]).\n"
+            f"3. If NONE of the passages contain information relevant to answering the question, respond strictly with: NONE.\n\n"
+            f"Your output (either [id1, id2, ...] or NONE):"
         )
 
         try:
             resp = await ainvoke_utility(
-                prompt=grader_prompt,
-                system_prompt="You are a strict relevance evaluator. Answer strictly YES or NO."
+                prompt=reranker_prompt,
+                system_prompt="You are a strict semantic re-ranker. Output strictly a JSON list of top-ranking passage numbers or NONE."
             )
-            is_rel = "YES" in resp.strip().upper()
-            logger.info(f"[Node:grade_documents] Evaluated '{query}': {'YES' if is_rel else 'NO'}")
-            return {"documents_relevant": is_rel}
+            return self._parse_rerank_response(resp, sources, query)
         except Exception as e:
-            logger.warning(f"[Node:grade_documents] Semantic grader error: {e}. Trying Gemini fallback...")
+            logger.warning(f"[Node:grade_documents] Semantic re-ranker error: {e}. Trying Gemini fallback...")
             try:
                 fb_text = generate_with_gemini_fallback(
                     client=self.client,
-                    contents=grader_prompt,
-                    config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=5)
+                    contents=reranker_prompt,
+                    config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=20)
                 )
-                is_rel = "YES" in fb_text.strip().upper()
-                return {"documents_relevant": is_rel}
+                return self._parse_rerank_response(fb_text, sources, query)
             except Exception as fe:
-                logger.error(f"[Node:grade_documents] Fallback grader failed: {fe}")
-                return {"documents_relevant": False}
+                logger.error(f"[Node:grade_documents] Fallback re-ranker failed: {fe}")
+                return {"documents_relevant": False, "retrieved_sources": []}
+
+    def _parse_rerank_response(self, resp: str, sources: List[Dict], query: str) -> Dict[str, Any]:
+        """Helper to parse semantic re-ranking output and re-order sources."""
+        resp_clean = (resp or "").strip()
+        resp_upper = resp_clean.upper()
+
+        if "NONE" in resp_upper and not re.search(r'\[\s*\d+', resp_clean):
+            logger.info(f"[Node:grade_documents] Query '{query}' evaluated as out-of-domain (NONE). Relevant: False")
+            return {"documents_relevant": False, "retrieved_sources": []}
+
+        # Extract ranked passage indices
+        ranked_ids = [int(x) for x in re.findall(r'\b([1-8])\b', resp_clean)]
+        seen = set()
+        ordered_ids = []
+        for rid in ranked_ids:
+            if rid not in seen and 1 <= rid <= len(sources):
+                seen.add(rid)
+                ordered_ids.append(rid)
+
+        if ordered_ids:
+            re_ranked_sources = [sources[i - 1] for i in ordered_ids[:3]]
+            logger.info(f"[Node:grade_documents] Re-ranked {len(sources)} candidates for '{query}' -> Top IDs: {ordered_ids[:3]}")
+            return {
+                "documents_relevant": True,
+                "retrieved_sources": re_ranked_sources
+            }
+
+        # If model returned YES or partial text without explicit numbers, default to top candidates
+        if "YES" in resp_upper:
+            logger.info(f"[Node:grade_documents] Grader responded YES without IDs. Keeping top {min(3, len(sources))} sources.")
+            return {
+                "documents_relevant": True,
+                "retrieved_sources": sources[:3]
+            }
+
+        logger.info(f"[Node:grade_documents] Could not extract valid ranks from: '{resp_clean}'. Relevant: False")
+        return {"documents_relevant": False, "retrieved_sources": []}
 
     async def generate(self, state: AgentState) -> Dict[str, Any]:
         """

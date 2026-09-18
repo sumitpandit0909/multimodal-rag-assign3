@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _QUERY_EMBEDDING_CACHE: Dict[str, List[float]] = {}
 
 @traceable(name="search_vector_store", run_type="retriever")
-async def search_vector_store(query: str, db: AsyncIOMotorDatabase, genai_client: genai.Client, top_k: int = 3) -> List[Dict]:
+async def search_vector_store(query: str, db: AsyncIOMotorDatabase, genai_client: genai.Client, top_k: int = 8) -> List[Dict]:
     cache_key = query.strip().lower()
     
     if cache_key in _QUERY_EMBEDDING_CACHE:
@@ -48,7 +48,7 @@ async def search_vector_store(query: str, db: AsyncIOMotorDatabase, genai_client
                 "index": "vector_index",
                 "path": "embedding",
                 "queryVector": query_vector,
-                "numCandidates": 50,
+                "numCandidates": max(50, top_k * 10),
                 "limit": top_k
             }
         },
