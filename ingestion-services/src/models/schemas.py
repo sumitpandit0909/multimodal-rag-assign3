@@ -1,5 +1,5 @@
-from typing import List, Optional, Any, Dict
-from pydantic import BaseModel, Field
+from typing import List, Optional
+from pydantic import BaseModel
 
 class JobStage(BaseModel):
     id: str

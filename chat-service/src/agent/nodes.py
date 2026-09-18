@@ -7,7 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from agent.state import AgentState
 from agent.tools import search_vector_store
-from models.schemas import RerankOutput, SynthesisOutput, CandidateChunk
+from models.schemas import RerankOutput, SynthesisOutput
 from agent.llm import (
     ainvoke_generator,
     ainvoke_utility,

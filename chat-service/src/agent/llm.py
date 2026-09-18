@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional, List, Any
+from typing import Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from google import genai

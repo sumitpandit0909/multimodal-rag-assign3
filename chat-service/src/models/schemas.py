@@ -1,17 +1,6 @@
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 
-class CandidateChunk(BaseModel):
-    """Strongly-typed candidate vector chunk retrieved from Atlas."""
-    file_name: str
-    source_type: str = Field(description="'visual' or 'tabular'")
-    page_number: Optional[int] = None
-    sheet_name: Optional[str] = None
-    screenshot_url: Optional[str] = None
-    raw_data: Optional[List[Dict[str, Any]]] = None
-    text_content: str
-    score: float = Field(default=0.0, description="Vector cosine similarity score")
-
 class RerankOutput(BaseModel):
     """Structured output for the Semantic Re-ranker & Relevance Grader."""
     is_relevant: bool = Field(

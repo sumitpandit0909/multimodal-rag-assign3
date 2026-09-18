@@ -1,10 +1,9 @@
 import subprocess
-import os
 import shutil
 import tempfile
 from pathlib import Path
 import logging
-from typing import Optional, List, Dict
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 

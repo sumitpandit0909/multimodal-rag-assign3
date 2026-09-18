@@ -16,5 +16,5 @@ class MongoChatMemory:
             "user_message": user_message,
             "assistant_message": assistant_message,
             "sources": sources,
-            "timestamp": datetime.datetime.utcnow()
+            "timestamp": datetime.datetime.now(datetime.timezone.utc)
         })

@@ -1,16 +1,14 @@
 import uuid
 import shutil
 import logging
-from pathlib import Path
-from typing import Dict, Any, List
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
 from pymongo import MongoClient
 
 from core.config import MONGO_URI, MONGO_DB, DATA_DIR, genai_client
 from services.job_manager import job_manager
 from services.pipeline_orchestrator import process_file
 from storage.r2_storage import r2_storage
-from models.schemas import UploadResponse, JobStatus, DocumentListResponse, HealthResponse
+from models.schemas import UploadResponse, HealthResponse
 
 logger = logging.getLogger(__name__)
 

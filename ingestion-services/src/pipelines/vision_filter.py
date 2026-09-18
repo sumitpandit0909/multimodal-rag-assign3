@@ -15,14 +15,6 @@ except ImportError:
             return f
         return decorator
 
-from pydantic import BaseModel, Field
-
-class PageClassification(BaseModel):
-    is_useful: bool = Field(
-        description="True if the page contains informative diagrams, charts, tables, structured text, or facts. False if it is blank, a logo cover, or thank-you slide."
-    )
-    reasoning: Optional[str] = Field(default=None, description="Short explanation of decision.")
-
 logger = logging.getLogger(__name__)
 
 CLASSIFICATION_PROMPT = (
