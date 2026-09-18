@@ -147,6 +147,7 @@ class AgentState(TypedDict):
 * **`src/pipelines/visual_pipeline.py`**: PyMuPDF 150 DPI PNG page screenshotting.
 * **`src/pipelines/vision_filter.py`**: Gemma-3-27b-it OpenRouter vision filter (`YES`/`NO`).
 * **`src/pipelines/llama_parser.py`**: Layout-aware markdown parsing with LlamaParse.
+* **`src/pipelines/chunking.py`**: Recursive character text splitter (800 chars, 150 overlap) with paragraph/sentence boundary preservation.
 * **`src/pipelines/excel_pipeline.py`**: Dynamic token-aware row chunking based on column width, markdown conversion, BSON sanitization (**no screenshots**).
 * **`src/storage/vector_store.py`**: Batch 768d embedding generation with automatic file de-duplication in MongoDB Atlas.
 * **`src/storage/r2_storage.py`**: Cloudflare R2 S3-compatible cloud object storage manager for page screenshots and converted PDFs with automatic fallback to local `/static` storage.

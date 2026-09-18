@@ -14,6 +14,7 @@ from pipelines.visual_pipeline import extract_page_screenshots
 from pipelines.vision_filter import classify_page_image, extract_image_description
 from pipelines.llama_parser import parse_page_with_llamaparse
 from pipelines.excel_pipeline import parse_excel_file
+from pipelines.chunking import recursive_chunk_text
 from storage.vector_store import ingest_to_atlas
 from storage.r2_storage import r2_storage
 
@@ -23,13 +24,14 @@ def _process_single_page(
     sc: Dict[str, Any],
     file_path: Path,
     client: genai.Client
-) -> Optional[Dict[str, Any]]:
+) -> List[Dict[str, Any]]:
     """
     Worker function executed in parallel for a single page screenshot.
     Performs:
     1. Gemma-3-27b-it vision classification filter
     2. LlamaParse layout extraction (or fallback)
     3. Cloudflare R2 image upload (or local fallback)
+    4. Recursive character text chunking (800 chars, 150 overlap)
     """
     page_num = sc["page_number"]
     img_path = sc["image_path"]
@@ -38,7 +40,7 @@ def _process_single_page(
     is_valid = classify_page_image(client, img_path)
     if not is_valid:
         logger.info(f"Filtered out {file_path.name} page {page_num} (no actionable knowledge).")
-        return None
+        return []
 
     # 2. Content Extraction (LlamaParse or OCR fallback)
     markdown_content = parse_page_with_llamaparse(img_path, LLAMA_CLOUD_API_KEY)
@@ -56,16 +58,24 @@ def _process_single_page(
         if uploaded_url:
             screenshot_url = uploaded_url
 
-    content = f"### Document: {file_path.name} | Page {page_num}\n{markdown_content}"
-    return {
-        "file_name": file_path.name,
-        "source_type": "visual",
-        "page_number": page_num,
-        "sheet_name": None,
-        "screenshot_url": screenshot_url,
-        "raw_data": None,
-        "text_content": content
-    }
+    # 4. Recursive Character Chunking (800 chars, 150 overlap)
+    sub_chunks = recursive_chunk_text(markdown_content, chunk_size=800, chunk_overlap=150)
+    if not sub_chunks:
+        sub_chunks = [markdown_content]
+
+    page_records = []
+    for chunk_text in sub_chunks:
+        content = f"### Document: {file_path.name} | Page {page_num}\n{chunk_text}"
+        page_records.append({
+            "file_name": file_path.name,
+            "source_type": "visual",
+            "page_number": page_num,
+            "sheet_name": None,
+            "screenshot_url": screenshot_url,
+            "raw_data": None,
+            "text_content": content
+        })
+    return page_records
 
 def process_file(file_path: Path, client: genai.Client = genai_client, job_id: Optional[str] = None):
     """
@@ -122,15 +132,19 @@ def process_file(file_path: Path, client: genai.Client = genai_client, job_id: O
                         job_manager.update_stage(job_id, "extract", "completed", f"Extracted text from {len(fallback_slides)} slides", progress=85)
 
                         for s in fallback_slides:
-                            records.append({
-                                "file_name": file_path.name,
-                                "source_type": "visual",
-                                "page_number": s["page_number"],
-                                "sheet_name": None,
-                                "screenshot_url": None,
-                                "raw_data": None,
-                                "text_content": f"### Document: {file_path.name} | Slide {s['page_number']}\n{s['text']}"
-                            })
+                            slide_chunks = recursive_chunk_text(s["text"], chunk_size=800, chunk_overlap=150)
+                            if not slide_chunks:
+                                slide_chunks = [s["text"]]
+                            for chunk_text in slide_chunks:
+                                records.append({
+                                    "file_name": file_path.name,
+                                    "source_type": "visual",
+                                    "page_number": s["page_number"],
+                                    "sheet_name": None,
+                                    "screenshot_url": None,
+                                    "raw_data": None,
+                                    "text_content": f"### Document: {file_path.name} | Slide {s['page_number']}\n{chunk_text}"
+                                })
 
                         # Proceed directly to vectorization
                         if records:
@@ -174,9 +188,9 @@ def process_file(file_path: Path, client: genai.Client = genai_client, job_id: O
                         progress=min(current_progress, 88)
                     )
                     try:
-                        record = future.result()
-                        if record:
-                            records.append(record)
+                        page_records = future.result()
+                        if page_records:
+                            records.extend(page_records)
                     except Exception as page_err:
                         logger.warning(f"Error processing page in thread pool: {page_err}")
 
