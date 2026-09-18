@@ -7,10 +7,13 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from agent.state import AgentState
 from agent.tools import search_vector_store
+from models.schemas import RerankOutput, SynthesisOutput, CandidateChunk
 from agent.llm import (
     ainvoke_generator,
     ainvoke_utility,
+    ainvoke_structured_utility,
     generate_with_gemini_fallback,
+    generate_structured_gemini_fallback,
     SYSTEM_PROMPT
 )
 
@@ -64,27 +67,62 @@ class RAGNodes:
             f"Your output (either [id1, id2, ...] or NONE):"
         )
 
+        # 1. First attempt: Strict Pydantic structured output with LangChain OpenRouter
+        rerank_output: Optional[RerankOutput] = None
         try:
-            resp = await ainvoke_utility(
+            rerank_output = await ainvoke_structured_utility(
                 prompt=reranker_prompt,
-                system_prompt="You are a strict semantic re-ranker. Output strictly a JSON list of top-ranking passage numbers or NONE."
+                schema=RerankOutput,
+                system_prompt="You are a strict semantic evaluator and re-ranker. Return strictly valid JSON matching the schema."
             )
-            return self._parse_rerank_response(resp, sources, query)
         except Exception as e:
-            logger.warning(f"[Node:grade_documents] Semantic re-ranker error: {e}. Trying Gemini fallback...")
+            logger.warning(f"[Node:grade_documents] LangChain structured output error: {e}")
+
+        # 2. Second attempt: Direct Google GenAI SDK fallback with native Pydantic schema
+        if not rerank_output:
             try:
-                fb_text = generate_with_gemini_fallback(
+                rerank_output = generate_structured_gemini_fallback(
                     client=self.client,
-                    contents=reranker_prompt,
-                    config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=20)
+                    prompt=reranker_prompt,
+                    schema=RerankOutput,
+                    system_prompt="You are a strict semantic evaluator and re-ranker. Return strictly valid JSON matching the schema."
                 )
-                return self._parse_rerank_response(fb_text, sources, query)
             except Exception as fe:
-                logger.error(f"[Node:grade_documents] Fallback re-ranker failed: {fe}")
+                logger.error(f"[Node:grade_documents] Structured Gemini fallback failed: {fe}")
+
+        # 3. Process the validated Pydantic model
+        if rerank_output:
+            if not rerank_output.is_relevant:
+                logger.info(f"[Node:grade_documents] Pydantic evaluated '{query}' as out-of-domain. Relevant: False")
                 return {"documents_relevant": False, "retrieved_sources": []}
 
+            ordered_ids = []
+            for rid in rerank_output.ranked_ids:
+                if 1 <= rid <= len(sources) and rid not in ordered_ids:
+                    ordered_ids.append(rid)
+
+            if ordered_ids:
+                re_ranked_sources = [sources[i - 1] for i in ordered_ids[:3]]
+                logger.info(f"[Node:grade_documents] Pydantic Re-ranker selected top IDs: {ordered_ids[:3]} | Reasoning: {rerank_output.reasoning}")
+                return {
+                    "documents_relevant": True,
+                    "retrieved_sources": re_ranked_sources
+                }
+            elif sources:
+                return {
+                    "documents_relevant": True,
+                    "retrieved_sources": sources[:3]
+                }
+
+        # 4. Tertiary safety net: Raw text parsing fallback
+        try:
+            raw_text = await ainvoke_utility(reranker_prompt)
+            return self._parse_rerank_response(raw_text, sources, query)
+        except Exception:
+            return {"documents_relevant": False, "retrieved_sources": []}
+
     def _parse_rerank_response(self, resp: str, sources: List[Dict], query: str) -> Dict[str, Any]:
-        """Helper to parse semantic re-ranking output and re-order sources."""
+        """Safety net to parse semantic re-ranking output if structured mode is unavailable."""
         resp_clean = (resp or "").strip()
         resp_upper = resp_clean.upper()
 
@@ -92,7 +130,6 @@ class RAGNodes:
             logger.info(f"[Node:grade_documents] Query '{query}' evaluated as out-of-domain (NONE). Relevant: False")
             return {"documents_relevant": False, "retrieved_sources": []}
 
-        # Extract ranked passage indices
         ranked_ids = [int(x) for x in re.findall(r'\b([1-8])\b', resp_clean)]
         seen = set()
         ordered_ids = []
@@ -109,7 +146,6 @@ class RAGNodes:
                 "retrieved_sources": re_ranked_sources
             }
 
-        # If model returned YES or partial text without explicit numbers, default to top candidates
         if "YES" in resp_upper:
             logger.info(f"[Node:grade_documents] Grader responded YES without IDs. Keeping top {min(3, len(sources))} sources.")
             return {
@@ -146,11 +182,27 @@ class RAGNodes:
         )
 
         answer_text = ""
+        cited_indices: Set[int] = set()
+
+        # Attempt structured synthesis
         try:
-            logger.info("[Node:generate] Invoking LangChain OpenRouter (google/gemma-3-27b-it)...")
-            answer_text = await ainvoke_generator(user_prompt)
-        except Exception as e:
-            logger.warning(f"[Node:generate] OpenRouter generation failed ({e}). Falling back to Gemini...")
+            synthesis = await ainvoke_structured_utility(
+                prompt=user_prompt,
+                schema=SynthesisOutput,
+                system_prompt=SYSTEM_PROMPT
+            )
+            if synthesis and synthesis.answer:
+                answer_text = synthesis.answer
+                cited_indices = set(int(x) for x in synthesis.cited_sources if 1 <= int(x) <= len(sources[:3]))
+        except Exception as se:
+            logger.warning(f"[Node:generate] Structured synthesis failed ({se}), falling back to standard generator...")
+
+        if not answer_text or not answer_text.strip():
+            try:
+                logger.info("[Node:generate] Invoking LangChain OpenRouter (google/gemma-3-27b-it)...")
+                answer_text = await ainvoke_generator(user_prompt)
+            except Exception as e:
+                logger.warning(f"[Node:generate] OpenRouter generation failed ({e}). Falling back to Gemini...")
 
         if not answer_text or not answer_text.strip():
             answer_text = generate_with_gemini_fallback(
@@ -158,15 +210,13 @@ class RAGNodes:
                 contents=user_prompt
             )
 
-        # Extract all citation numbers in square brackets: [1], [2], [Source 1], etc.
-        cited_indices: Set[int] = set(int(m) for m in re.findall(r'\[(?:Source\s*|Doc\s*)?(\d+)\]', answer_text, re.IGNORECASE))
-        
-        # If model used parentheses like (1), (2), catch them as well
+        # Fallback citation extraction if not extracted by structured schema
+        if not cited_indices:
+            cited_indices = set(int(m) for m in re.findall(r'\[(?:Source\s*|Doc\s*)?(\d+)\]', answer_text, re.IGNORECASE))
         if not cited_indices:
             cited_indices = set(int(m) for m in re.findall(r'\((\d+)\)', answer_text))
 
-        # Robust Fallback: If context was marked relevant but the model forgot inline brackets,
-        # ensure sources are not dropped so the user sees the visual citations!
+        # Guarantee at least verified sources are linked if answer has content
         if not cited_indices and sources:
             cited_indices = set(range(1, len(sources[:3]) + 1))
             inline_tags = " ".join([f"[{i}]" for i in sorted(list(cited_indices))])

@@ -156,7 +156,7 @@ class AgentState(TypedDict):
 * **`Dockerfile`**: Lightweight Python 3.11 container running Uvicorn on port 8000.
 * **`requirements.txt`**: Added `langgraph>=0.2.20` and `langchain-core>=0.3.0`.
 * **`src/main.py`**: Clean FastAPI application factory, CORS setup, static screenshot mount, and router registration.
-* **`src/models/schemas.py`**: Pydantic data models (`ChatRequest`, `ChatResponse`, `SourceNode`, `DocumentListResponse`, `HealthResponse`).
+* **`src/models/schemas.py`**: Pydantic data models (`ChatRequest`, `ChatResponse`, `SourceNode`, `CandidateChunk`, `RerankOutput`, `SynthesisOutput`, `DocumentListResponse`, `HealthResponse`).
 * **`src/db/connection.py`**: Singleton connections for MongoDB Atlas (`AsyncIOMotorClient`) and Google GenAI.
 * **`src/db/memory.py`**: Asynchronous multi-turn conversation memory (`MongoChatMemory`).
 * **`src/agent/state.py`**: Typed state dictionary (`AgentState`) for the LangGraph state machine.
